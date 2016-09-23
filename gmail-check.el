@@ -183,7 +183,7 @@ Two files will be created:
   "Stores NBMAILS and OUTPUT (mail headers) in files.
 
 The filenames and locations are specified with `gmail-check-output-file-root'"
-  (write-region (if (> 0 nbmails)
+  (write-region (if (< 0 nbmails)
 		    (format "%d\n" nbmails)
 		  (concat "\n"))
 		  nil (expand-file-name (concat gmail-check-output-file-root "-nbmails.txt")) nil 42) ;; 42 is "neither t nor nil nor string" to write quietly without output to the message buffer
