@@ -68,14 +68,16 @@
 ;;; Code:
 
 (require 'url)
+(require 'cl)
 
 ;; User configurable variables
 ;; --------------------
 (defconst gmail-check-checkmail-timeout 30
-  "The time in seconds that has to pass before checking the mail again")
+  "The time in seconds that has to pass before checking the mail again.")
 
 (defvar gmail-check-watch nil
-  "Add (NAME . FUNCTION) pairs here. When there is an email from NAME, execute FUNCTION.
+  "Add (NAME . FUNCTION) pairs here.
+When there is an email from NAME, execute FUNCTION.
 
 When FUNCTION is nil, just do the basic notification (change
 colour in mode line, add name to help text)
@@ -86,9 +88,9 @@ you will suffer the effects of the function until you finally
 read the mail in question")
 
 (defvar gmail-check-output-functions nil
-  "List of functions to call with the output. Each function takes
-  two arguments: Number of mails, and a string with names and
-  titles")
+  "List of functions to call with the output.
+Each function takes two arguments: Number of mails, and a string with names and
+titles")
 
 (defvar gmail-check-output-file-root "/tmp/gmail-check"
   "Location for file when using the `gmail-check-output-file' function.
@@ -97,28 +99,43 @@ Two files will be created:
 - <filename>-nbmails.txt contains the number of unread mails.
 - <filename>-headers.txt contains the headers of the unread mails")
 
+(defvar gmail-check-suspend nil
+  "Temporarily suspend checking (useful if e.g. network is shaky)
+
+Default is nil (not suspended)
+Suspend checking if any other value.")
 
 ;; Internal variables and constants
 ;; --------------------
 (defvar gmail-check-last-output ""
-  "Keep the last output for the modeline menu")
+  "Keep the last output for the modeline menu.")
 (defvar gmail-check-last-mailcount 0
-  "Keep the last mailcount for the modeline menu")
+  "Keep the last mailcount for the modeline menu.")
 (defconst gmail-check-atom-url "https://mail.google.com/mail/feed/atom"
   "The URL that gmail publishes its RSS feed on.")
 (defvar gmail-check-help-text ""
-  "Text to display when hovering over mode-line")
+  "Text to display when hovering over mode-line.")
 
 ;; Some faces
 (put 'gmail-check-face-normal 'face-alias 'mode-line)
-(put 'gmail-check-face-highlight 'face-alias 'font-lock-type-face)
+(put 'gmail-check-face-highlight 'face-alias 'mode-line-buffer-id)
 (put 'gmail-check-face 'face-alias 'gmail-check-face-normal)
 
+
+;; Toggle Suspend
+;; --------------------
+(defun gmail-check-suspend ()
+  "Toggle temporary suspension of gmail-check."
+  (interactive)
+  (setq gmail-check-suspend (not gmail-check-suspend))
+  (unless gmail-check-suspend
+    (gmail-check-do-output-file 0 "-- Gmail-check is temporarily suspended --"))
+  gmail-check-suspend)
 
 ;; Add to Modeline
 ;; --------------------
 (defun gmail-check-modeline ()
-  "Modeline function. Make sure I don't retreive the e-mails more often than gmail-check-checkmail-timeout"
+  "Modeline function. Make sure I don't retreive the e-mails more often than gmail-check-checkmail-timeout."
   (if (boundp 'gmail-check-time-last)
       (if (>= (nth 1 (current-time)) (+ gmail-check-time-last gmail-check-checkmail-timeout))
 	  (progn
@@ -133,13 +150,16 @@ Two files will be created:
       (message "gmail-check: First run, retrieving mail...")
       (setq gmail-check-time-last (nth 1 (current-time)))
       (gmail-check-retrieve)))
-  (if (> gmail-check-last-mailcount 0)
-      (format "[✉%d]"	gmail-check-last-mailcount)
-    (concat "")))
+  (if gmail-check-suspend
+      (concat "[✉✖]")			;; There ought to be a better "suspend" symbol, but I CBA to find it now.
+    (if (> gmail-check-last-mailcount 0)
+	(format "✉%d"	gmail-check-last-mailcount)
+      (concat ""))
+    ))
 
 
 (defun gmail-check-modeline-init ()
-  "Add the number of unread mails to the modeline"
+  "Add the number of unread mails to the modeline."
   (interactive)
   (add-to-list 'global-mode-string '(:eval (propertize (gmail-check-modeline)
 						       'face 'gmail-check-face
@@ -149,7 +169,8 @@ Two files will be created:
 ;; Act on watched senders
 ;; --------------------
 (defun gmail-check-execute-watches (names)
-  "uses the variable `gmail-check-watch'. If a name match is found, it calls the corresponding function"
+  "Check NAMES using the variable `gmail-check-watch'.
+If a name match is found, it calls the corresponding function"
 ;;  (message "gmail-check: Executing watches...")
   (put 'gmail-check-face 'face-alias 'gmail-check-face-normal)
   (setq gmail-check-help-text "")
@@ -172,7 +193,7 @@ Two files will be created:
 ;; --------------------
 
 (defun gmail-check-do-output-default (nbmails output)
-  "Displays the mail headers in a temp buffer"
+  "Displays the mail headers in a temp buffer."
   (message (format "New mails: %d" nbmails))
   (unless (= nbmails 0)
     (with-output-to-temp-buffer "*MailHeaders*"
@@ -180,7 +201,7 @@ Two files will be created:
       )))
 
 (defun gmail-check-do-output-file (nbmails output)
-  "Stores NBMAILS and OUTPUT (mail headers) in files.
+  "Store NBMAILS and OUTPUT (mail headers) in files.
 
 The filenames and locations are specified with `gmail-check-output-file-root'"
   (write-region (if (< 0 nbmails)
@@ -190,7 +211,7 @@ The filenames and locations are specified with `gmail-check-output-file-root'"
   (write-region (concat output "\n") nil (expand-file-name (concat gmail-check-output-file-root "-headers.txt")) nil 42))
  
 (defun gmail-check-do-output (nbmails output)
-  "Channel output to the specified places"
+  "Channel output to the specified places."
   (mapc (lambda (out-fun)
 	  (funcall out-fun nbmails output))
 	gmail-check-output-functions))
@@ -198,7 +219,7 @@ The filenames and locations are specified with `gmail-check-output-file-root'"
 ;; Core Functions 
 ;; --------------------          
 (defun gmail-check-do-basic-string-cleanup (string)
-  "Remove the most obvious swedish utf-8 characters.
+  "Remove the most obvious swedish utf-8 characters from STRING.
 This is an ugly hack and does not remove all utf-8 junk, but it'll do for now"
   (let* ((charmap [["\\\303\\\245" "å"]
 		   ["\\\303\\\244" "ä"]
@@ -215,7 +236,7 @@ This is an ugly hack and does not remove all utf-8 junk, but it'll do for now"
     string))
 
 (defun gmail-check-format-output (titles names emails)
-  "Format the list of mails as name <email> :: title"
+  "Format the list of mails as name <email> :: title."
   (let ((output ""))
     (while names
       (setq output (concat output
@@ -230,44 +251,43 @@ This is an ugly hack and does not remove all utf-8 junk, but it'll do for now"
     (setq gmail-check-last-output output)))
 
 (defun gmail-check-extract (block)
-  "Extract the next BLOCK from current buffer"
+  "Extract the next BLOCK from current buffer."
   (let* ((start (search-forward (concat "<" block ">")))
 	 (end (- (search-forward "</") 2)))
     (if (= start end)
 	(concat "--- no " block " ---")
       (buffer-substring start end))))       
 
-
 (defun gmail-check-retrieve ()
-  "Retrieve the atom feed for gmail and extracts the number of mails plus author/title"
-  (url-retrieve gmail-check-atom-url
-		(lambda (status)
-		  (let ((titles '())
-			(names '())
-			(emails '())
-			(nbread 0)
-			(nbmails 0)
-			(output ""))
-		    (goto-char 1)
-		    (search-forward "</title>")
-		    (setq nbmails (how-many "<title>"))
-		    (setq gmail-check-last-mailcount nbmails)
-		    (while (> nbmails nbread)
-		      (push (gmail-check-extract "title") titles)
-		      (push (gmail-check-extract "name") names)
-		      (push (gmail-check-extract "email") emails)
-		      (setq nbread (1+ nbread)))
-		    (gmail-check-execute-watches names)
-		    (setq output (gmail-check-format-output titles names emails))
-		    (gmail-check-do-output nbmails output)
-		    (kill-buffer)
-		    )) nil t))
-
+  "Retrieve the atom feed for gmail and extracts the number of mails plus author/title."
+  (unless gmail-check-suspend
+    (url-retrieve gmail-check-atom-url
+                  (lambda (status)
+                    (let ((titles '())
+                          (names '())
+                          (emails '())
+                          (nbread 0)
+                          (nbmails 0)
+                          (output ""))
+                      (goto-char 1)
+                      (search-forward "</title>" nil t)
+                      (setq nbmails (how-many "<title>"))
+                      (setq gmail-check-last-mailcount nbmails)
+                      (while (> nbmails nbread)
+                        (push (gmail-check-extract "title") titles)
+                        (push (gmail-check-extract "name") names)
+                        (push (gmail-check-extract "email") emails)
+                        (setq nbread (1+ nbread)))
+                      (gmail-check-execute-watches names)
+                      (setq output (gmail-check-format-output titles names emails))
+                      (gmail-check-do-output nbmails output)
+                      (kill-buffer)
+                      )) nil t)))
 
 (defun gmail-check ()
-  "Initialise gmail-check"
-  (interactive)
-  (gmail-check-modeline-init))
+  "Initialise gmail-check."
+  (interactive))
+  ;;(gmail-check-modeline-init))
 
 (provide 'gmail-check)
 ;;; gmail-check.el ends here
